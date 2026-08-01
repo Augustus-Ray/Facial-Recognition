@@ -1,0 +1,3 @@
+employee_id,name,image_path,active
+EMP001,Jane Doe,EMP001_Jane_Doe.jpg,yes
+EMP002,John Smith,EMP002_John_Smith/front.jpg,yes
