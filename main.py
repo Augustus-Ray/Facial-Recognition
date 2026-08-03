@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from attendance_app.encoder import generate_encodings
 from attendance_app.excel_exporter import export_workbook
 from attendance_app.recognizer import run_webcam
 from attendance_app.roster import generate_roster
+from attendance_app.schedule import AttendanceSchedule, parse_clock_time
+from attendance_app.settings import ensure_company_settings, load_company_settings
 
 
 def project_path(value: str | Path) -> Path:
@@ -25,7 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--db", default=str(DEFAULT_PATHS.database_path), help="SQLite database path.")
     parser.add_argument("--excel", default=str(DEFAULT_PATHS.workbook_path), help="Excel workbook path.")
+    parser.add_argument("--attendance-dir", default=str(DEFAULT_PATHS.attendance_dir), help="Daily attendance Excel folder.")
     parser.add_argument("--roster", default=str(DEFAULT_PATHS.roster_path), help="Employee roster CSV path.")
+    parser.add_argument("--settings", default=str(DEFAULT_PATHS.settings_path), help="Company settings JSON path.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -43,7 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     roster.add_argument("--force", action="store_true", help="Overwrite an existing roster CSV.")
 
     run = subparsers.add_parser("run", help="Start real-time webcam attendance recognition.")
-    run.add_argument("--mode", choices=["entrance", "exit"], default="entrance", help="Attendance mode.")
+    run.add_argument("--mode", choices=["auto", "entrance", "exit"], default="auto", help="Attendance mode.")
+    run.add_argument("--check-in-time", help="Auto mode check-in time, such as 08:00 or 8am.")
+    run.add_argument("--check-out-time", help="Auto mode check-out time, such as 16:00 or 4pm.")
+    run.add_argument("--timezone", help="IANA time zone name, such as America/New_York.")
     run.add_argument("--camera", type=int, default=0, help="OpenCV camera index.")
     run.add_argument("--tolerance", type=float, default=0.50, help="Lower is stricter. Typical range: 0.45-0.60.")
     run.add_argument("--process-every", type=int, default=2, help="Run recognition every N frames.")
@@ -61,15 +69,19 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     db_path = project_path(args.db)
     workbook_path = project_path(args.excel)
+    attendance_dir = project_path(args.attendance_dir)
     roster_path = project_path(args.roster)
+    settings_path = project_path(args.settings)
 
     try:
         if args.command == "init-db":
+            ensure_company_settings(settings_path)
             with database_session(db_path) as conn:
                 initialize_database(conn)
-            export_workbook(db_path, workbook_path)
+            export_workbook(db_path, workbook_path, attendance_dir)
             print(f"Database ready: {db_path}")
             print(f"Excel workbook ready: {workbook_path}")
+            print(f"Daily attendance folder ready: {attendance_dir}")
 
         elif args.command == "encode":
             count = generate_encodings(
@@ -77,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
                 roster_path=roster_path,
                 db_path=db_path,
                 workbook_path=None if args.no_excel else workbook_path,
+                attendance_dir=attendance_dir,
                 detection_model=args.model,
             )
             print(f"Stored {count} face encoding(s).")
@@ -93,10 +106,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Mapped {count} image(s). Review employee IDs/names before encoding.")
 
         elif args.command == "run":
+            settings = load_company_settings(settings_path)
+            if args.timezone:
+                os.environ["ATTENDANCE_TIMEZONE"] = args.timezone
+            elif settings.timezone and not os.getenv("ATTENDANCE_TIMEZONE"):
+                os.environ["ATTENDANCE_TIMEZONE"] = settings.timezone
+            schedule = AttendanceSchedule(
+                check_in_time=parse_clock_time(args.check_in_time or settings.check_in_time),
+                check_out_time=parse_clock_time(args.check_out_time or settings.check_out_time),
+            )
             run_webcam(
                 db_path=db_path,
                 workbook_path=workbook_path,
+                attendance_dir=attendance_dir,
                 mode=args.mode,
+                schedule=schedule,
                 camera_index=args.camera,
                 tolerance=args.tolerance,
                 process_every=args.process_every,
@@ -106,8 +130,9 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         elif args.command == "export":
-            export_workbook(db_path, workbook_path)
+            export_workbook(db_path, workbook_path, attendance_dir)
             print(f"Excel workbook written: {workbook_path}")
+            print(f"Daily attendance files written in: {attendance_dir}")
 
         elif args.command == "employees":
             with database_session(db_path) as conn:
@@ -116,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
             if not employees:
                 print("No employees enrolled yet. Add images, then run: python main.py encode")
             for employee in employees:
-                print(f"{employee['employee_id']}\t{employee['name']}\t{employee['encoding_count']} encoding(s)")
+                status = "active" if employee["active"] else "inactive"
+                print(f"{employee['employee_id']}\t{employee['name']}\t{status}")
 
         return 0
     except Exception as exc:  # CLI boundary: keep operational errors readable.

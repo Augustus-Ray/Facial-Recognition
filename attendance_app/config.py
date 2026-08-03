@@ -16,7 +16,9 @@ class AppPaths:
     root: Path
     image_dir: Path
     data_dir: Path
+    attendance_dir: Path
     roster_path: Path
+    settings_path: Path
     database_path: Path
     workbook_path: Path
 
@@ -25,7 +27,9 @@ DEFAULT_PATHS = AppPaths(
     root=PROJECT_ROOT,
     image_dir=PROJECT_ROOT / "images",
     data_dir=PROJECT_ROOT / "data",
+    attendance_dir=PROJECT_ROOT / "attendance",
     roster_path=PROJECT_ROOT / "employees.csv",
+    settings_path=PROJECT_ROOT / "company_settings.json",
     database_path=PROJECT_ROOT / "data" / "attendance.db",
     workbook_path=PROJECT_ROOT / "data" / "attendance.xlsx",
 )
@@ -34,6 +38,7 @@ DEFAULT_PATHS = AppPaths(
 def ensure_runtime_dirs(paths: AppPaths = DEFAULT_PATHS) -> None:
     paths.image_dir.mkdir(parents=True, exist_ok=True)
     paths.data_dir.mkdir(parents=True, exist_ok=True)
+    paths.attendance_dir.mkdir(parents=True, exist_ok=True)
 
 
 def now_local() -> datetime:

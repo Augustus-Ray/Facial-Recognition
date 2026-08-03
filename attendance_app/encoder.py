@@ -5,7 +5,8 @@ from pathlib import Path
 from attendance_app.config import DEFAULT_PATHS, ensure_runtime_dirs
 from attendance_app.database import EncodingRecord, database_session, initialize_database, replace_face_encodings
 from attendance_app.excel_exporter import export_workbook
-from attendance_app.roster import RosterEntry, entries_from_filenames, read_roster
+from attendance_app.face_backend import import_face_recognition
+from attendance_app.roster import entries_from_filenames, read_roster
 
 
 def generate_encodings(
@@ -14,10 +15,11 @@ def generate_encodings(
     roster_path: str | Path = DEFAULT_PATHS.roster_path,
     db_path: str | Path = DEFAULT_PATHS.database_path,
     workbook_path: str | Path | None = DEFAULT_PATHS.workbook_path,
+    attendance_dir: str | Path = DEFAULT_PATHS.attendance_dir,
     detection_model: str = "hog",
 ) -> int:
     try:
-        import face_recognition
+        face_recognition = import_face_recognition()
     except ImportError as exc:
         raise RuntimeError("face_recognition is required. Run: pip install -r requirements.txt") from exc
 
@@ -72,7 +74,7 @@ def generate_encodings(
         count = replace_face_encodings(conn, records)
 
     if workbook_path:
-        export_workbook(db_path, workbook_path)
+        export_workbook(db_path, workbook_path, attendance_dir)
 
     for warning in warnings:
         print(f"Warning: {warning}")

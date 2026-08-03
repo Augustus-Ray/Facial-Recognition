@@ -11,8 +11,11 @@ It follows the same core pattern used by `ageitgey/face_recognition`: create kno
 +-- attendance_app/          Python package
 +-- data/
 |   +-- attendance.db        Local database, generated
-|   +-- attendance.xlsx      Excel attendance file, generated
++-- attendance/
+|   +-- Attendance of 1 August 2026.xlsx
 +-- images/                  Add employee face images here
++-- company_settings.json    Company name, time zone, check-in/out times
++-- employees.csv            Employee roster, generated/editable
 +-- main.py                  Command-line app
 +-- requirements.txt
 ```
@@ -35,45 +38,90 @@ If `python` or `pip` opens the Microsoft Store or says the file cannot be access
 
 Employee IDs are the unique value. Put one clear face per image.
 
-Flat file style:
+Recommended flow:
+
+```powershell
+python main.py roster --force
+```
+
+This creates `employees.csv` from the images in `images/`. Review and edit the generated IDs/names before encoding. A plain image name like this:
+
+```text
+images/Jane Smith.jpg
+```
+
+becomes a roster row like this:
+
+```csv
+employee_id,name,image_path,active
+EMP001,Jane Smith,Jane Smith.jpg,yes
+```
+
+You can also provide IDs directly in image or folder names:
 
 ```text
 images/EMP001_John_Doe.jpg
 images/EMP002_Aisha_Khan.png
-```
-
-Multiple images per employee:
-
-```text
 images/EMP001_John_Doe/front.jpg
 images/EMP001_John_Doe/side.jpg
-images/EMP002_Aisha_Khan/photo1.jpg
 ```
 
 Use a bright, front-facing photo where only that employee's face is visible. The encoder skips images with zero faces or multiple faces.
+
+## Company Settings
+
+Edit `company_settings.json` for each company:
+
+```json
+{
+  "company_name": "Company",
+  "check_in_time": "08:00",
+  "check_out_time": "16:00",
+  "timezone": ""
+}
+```
+
+`check_in_time` and `check_out_time` drive auto attendance mode. If the employee is recognized closer to the check-in time, the system records entry/check-in. If recognition is closer to the check-out time, it records exit/check-out. For example, with `08:00` and `16:00`, morning recognitions clock in and afternoon recognitions clock out.
+
+Leave `timezone` blank to use the computer's local time zone, or set an IANA name such as `America/New_York`.
 
 ## Initialize And Encode
 
 ```powershell
 python main.py init-db
+python main.py roster --force
 python main.py encode
 python main.py employees
 ```
 
-Encoding reads `images/`, stores face encodings in `data/attendance.db`, and writes `data/attendance.xlsx`.
+Encoding reads `images/`, stores face encodings in `data/attendance.db`, and creates daily attendance files in `attendance/`.
 
 ## Run Attendance
 
-Entrance camera/check-in:
+Default single-camera auto mode:
+
+```powershell
+python main.py run
+```
+
+Auto mode uses the company times in `company_settings.json`.
+
+Dedicated entrance camera:
 
 ```powershell
 python main.py run --mode entrance
 ```
 
-Exit camera/check-out:
+Dedicated exit camera:
 
 ```powershell
 python main.py run --mode exit
+```
+
+Auto mode with temporary command-line times:
+
+```powershell
+python main.py run --mode auto --check-in-time 8am --check-out-time 4pm
 ```
 
 Keyboard controls while the camera window is open:
@@ -87,13 +135,23 @@ Q  quit
 
 The system records one check-in and one check-out per employee per calendar day. Repeated recognitions do not overwrite the first daily check-in or check-out.
 
-## Excel Output
+## Attendance Excel Files
 
-The workbook `data/attendance.xlsx` contains:
+Daily attendance files are generated in the `attendance/` folder. Each device date gets its own Excel file, named like:
 
-- `Employees`: employee IDs, names, and encoding counts.
-- `Daily Attendance`: date, employee ID, name, check-in time, and check-out time.
-- `Access Events`: recent recognition attempts, including unknown faces.
+```text
+attendance/Attendance of 1 August 2026.xlsx
+attendance/Attendance of 2 August 2026.xlsx
+```
+
+Each daily file contains:
+
+- `Name of Employee`
+- `ID of Employee`
+- `Clocked In Time`
+- `Clocked Out Time`
+
+The app also keeps `data/attendance.db` as the local database and `data/attendance.xlsx` as a master/admin export, but the daily files in `attendance/` are the files intended for attendance viewing.
 
 You can regenerate the workbook at any time:
 
@@ -105,6 +163,7 @@ python main.py export
 
 ```powershell
 python main.py run --camera 1
+python main.py run --check-in-time 07:30 --check-out-time 17:00
 python main.py run --tolerance 0.45
 python main.py run --process-every 3
 python main.py encode --model cnn
@@ -114,11 +173,11 @@ Lower tolerance is stricter. Start around `0.50`; if employees are falsely match
 
 ## Time Zone
 
-By default, the app uses the computer's local time zone. To force a business time zone:
+By default, the app uses the computer's local time zone. To force a business time zone, set `timezone` in `company_settings.json`, pass `--timezone`, or use `ATTENDANCE_TIMEZONE`:
 
 ```powershell
 $env:ATTENDANCE_TIMEZONE = "America/New_York"
-python main.py run --mode entrance
+python main.py run
 ```
 
 Use an IANA time zone name such as `America/New_York`, `America/Chicago`, `America/Denver`, or `America/Los_Angeles`.

@@ -23,6 +23,7 @@ def main() -> int:
 
     missing: list[str] = []
     warnings.filterwarnings("ignore", message="pkg_resources is deprecated.*")
+    warnings.filterwarnings("ignore", category=UserWarning, module="face_recognition_models")
     for module_name, package_name in REQUIRED_MODULES.items():
         try:
             module = importlib.import_module(module_name)

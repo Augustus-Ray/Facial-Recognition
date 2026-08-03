@@ -1,0 +1,6 @@
+{
+  "company_name": "Example Company",
+  "check_in_time": "08:00",
+  "check_out_time": "16:00",
+  "timezone": "America/New_York"
+}

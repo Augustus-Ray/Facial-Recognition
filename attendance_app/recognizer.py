@@ -7,6 +7,8 @@ from pathlib import Path
 from attendance_app.config import now_local
 from attendance_app.database import database_session, fetch_known_faces, initialize_database, log_unknown_face, record_attendance
 from attendance_app.excel_exporter import export_workbook
+from attendance_app.face_backend import import_face_recognition
+from attendance_app.schedule import AttendanceSchedule, describe_schedule, resolve_attendance_mode
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,9 @@ def run_webcam(
     *,
     db_path: str | Path,
     workbook_path: str | Path,
-    mode: str = "entrance",
+    attendance_dir: str | Path,
+    schedule: AttendanceSchedule,
+    mode: str = "auto",
     camera_index: int = 0,
     tolerance: float = 0.50,
     process_every: int = 2,
@@ -44,7 +48,7 @@ def run_webcam(
 ) -> None:
     try:
         import cv2
-        import face_recognition
+        face_recognition = import_face_recognition()
         import numpy as np
     except ImportError as exc:
         raise RuntimeError("OpenCV, numpy, and face_recognition are required. Run: pip install -r requirements.txt") from exc
@@ -83,6 +87,7 @@ def run_webcam(
                 detections, status_line, last_unknown_log = _process_frame(
                     frame=frame,
                     current_mode=current_mode,
+                    schedule=schedule,
                     known_faces=known_faces,
                     known_encodings=known_encodings,
                     tolerance=tolerance,
@@ -91,6 +96,7 @@ def run_webcam(
                     camera_index=camera_index,
                     db_path=db_path,
                     workbook_path=workbook_path,
+                    attendance_dir=attendance_dir,
                     last_logged=last_logged,
                     last_unknown_log=last_unknown_log,
                     cooldown_seconds=cooldown_seconds,
@@ -99,7 +105,7 @@ def run_webcam(
                     np=np,
                 )
 
-            _draw_overlay(frame, detections, current_mode, status_line, len(known_faces), tolerance, cv2)
+            _draw_overlay(frame, detections, current_mode, schedule, status_line, len(known_faces), tolerance, cv2)
             cv2.imshow("Company Attendance - Face Recognition", frame)
 
             key = cv2.waitKey(1) & 0xFF
@@ -128,6 +134,7 @@ def _process_frame(
     *,
     frame,
     current_mode: str,
+    schedule: AttendanceSchedule,
     known_faces: list[KnownFace],
     known_encodings: list,
     tolerance: float,
@@ -136,6 +143,7 @@ def _process_frame(
     camera_index: int,
     db_path: str | Path,
     workbook_path: str | Path,
+    attendance_dir: str | Path,
     last_logged: dict[tuple[str, str], datetime],
     last_unknown_log: datetime | None,
     cooldown_seconds: int,
@@ -155,6 +163,7 @@ def _process_frame(
         top, right, bottom, left = _scale_location(location, scale)
         match, distance = _best_match(face_encoding, known_faces, known_encodings, tolerance, np)
         event_time = now_local()
+        resolved_mode = resolve_attendance_mode(current_mode, event_time, schedule)
 
         if match is None:
             message = "ACCESS DENIED - UNKNOWN"
@@ -163,13 +172,13 @@ def _process_frame(
                     initialize_database(conn)
                     log_unknown_face(
                         conn,
-                        mode=current_mode,
+                        mode=resolved_mode,
                         message=message,
                         event_time=event_time,
                         camera_index=camera_index,
                         distance=distance,
                     )
-                export_workbook(db_path, workbook_path)
+                export_workbook(db_path, workbook_path, attendance_dir)
                 last_unknown_log = event_time
             detections.append(
                 Detection(top, right, bottom, left, None, "Unknown", distance, message, False)
@@ -177,7 +186,7 @@ def _process_frame(
             status_line = message
             continue
 
-        cooldown_key = (match.employee_id, current_mode)
+        cooldown_key = (match.employee_id, resolved_mode)
         last_event_time = last_logged.get(cooldown_key)
         if last_event_time and event_time - last_event_time < timedelta(seconds=cooldown_seconds):
             message = f"RECOGNIZED - {match.name}"
@@ -193,12 +202,12 @@ def _process_frame(
                 conn,
                 employee_id=match.employee_id,
                 name=match.name,
-                mode=current_mode,
+                mode=resolved_mode,
                 event_time=event_time,
                 camera_index=camera_index,
                 distance=distance,
             )
-        export_workbook(db_path, workbook_path)
+        export_workbook(db_path, workbook_path, attendance_dir)
         last_logged[cooldown_key] = event_time
         detections.append(
             Detection(
@@ -233,7 +242,7 @@ def _load_known_faces(conn, np) -> list[KnownFace]:
 def _best_match(face_encoding, known_faces: list[KnownFace], known_encodings: list, tolerance: float, np):
     distances = np.array([])
     if known_encodings:
-        import face_recognition
+        face_recognition = import_face_recognition()
 
         distances = face_recognition.face_distance(known_encodings, face_encoding)
     if len(distances) == 0:
@@ -251,12 +260,21 @@ def _scale_location(location: tuple[int, int, int, int], scale: float) -> tuple[
     return int(top * factor), int(right * factor), int(bottom * factor), int(left * factor)
 
 
-def _draw_overlay(frame, detections: list[Detection], mode: str, status: str, known_count: int, tolerance: float, cv2) -> None:
+def _draw_overlay(
+    frame,
+    detections: list[Detection],
+    mode: str,
+    schedule: AttendanceSchedule,
+    status: str,
+    known_count: int,
+    tolerance: float,
+    cv2,
+) -> None:
     height, width = frame.shape[:2]
     cv2.rectangle(frame, (0, 0), (width, 76), (20, 20, 20), cv2.FILLED)
     cv2.putText(
         frame,
-        f"Mode: {mode.upper()} | Known encodings: {known_count} | Tolerance: {tolerance:.2f}",
+        f"Mode: {_mode_label(mode, schedule)} | Known encodings: {known_count} | Tolerance: {tolerance:.2f}",
         (16, 28),
         cv2.FONT_HERSHEY_DUPLEX,
         0.62,
@@ -317,3 +335,9 @@ def _fit_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 3] + "..."
+
+
+def _mode_label(mode: str, schedule: AttendanceSchedule) -> str:
+    if mode == "auto":
+        return f"AUTO ({describe_schedule(schedule)})"
+    return mode.upper()

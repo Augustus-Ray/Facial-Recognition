@@ -6,8 +6,9 @@ __pycache__/
 # Generated local records
 data/*
 !data/.gitkeep
+attendance/*
+!attendance/.gitkeep
 
 # Employee face images are biometric data. Keep them local/private.
 images/*
 !images/.gitkeep
-
